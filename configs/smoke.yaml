@@ -1,0 +1,24 @@
+# CPU smoke test of the whole pipeline with a tiny random LLaMA (numbers are meaningless).
+name: smoke
+seed: 0
+data: {raw_dir: data/raw, processed_dir: data/processed, val_articles: 10, val_seed: 0, exclude_test_articles_from_train: true}
+targets: {kind: adjusted, person_ridge: 1.0}
+features:
+  model: hf-internal-testing/tiny-random-LlamaForCausalLM
+  dtype: float32
+  max_article_tokens: 256
+  use_chat_template: false
+  prompt: "Title: {title}\n\n{text}\n\nHow much empathy and distress would a typical reader feel?"
+  cache_dir: cache/features
+head:
+  type: ridge
+  layers: [1, -1]
+  pooling: [mean, last]
+  alphas: [10, 1000]
+  weight_decay: [1]
+  lr: 1e-3
+  epochs: 20
+  hidden: 16
+  dropout: 0.1
+eval: {protocols: [holdout, article_cv], refit_on_train_val: true, bootstrap: 100, outer_folds: 3, inner_folds: 3, repeats: 2}
+output_dir: cache/smoke_runs

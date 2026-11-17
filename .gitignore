@@ -1,0 +1,8 @@
+# Competition data is not redistributed (see README) — fetch it with scripts/download_data.sh
+data/
+cache/
+runs/
+__pycache__/
+*.pyc
+.venv/
+.env

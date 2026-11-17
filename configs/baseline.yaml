@@ -1,0 +1,55 @@
+# Baseline: article text -> score an average reader gives (no personalisation).
+# Frozen LLaMA, regression head on its hidden states.
+name: baseline_article_only
+seed: 0
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  # official dev split is not used. val = whole train articles (~10 essays each)
+  val_articles: 10               # ≈ 100 train essays
+  val_seed: 0
+  exclude_test_articles_from_train: true   # all 14 test articles are also train articles
+
+targets:
+  # adjusted: mu + article effect from y = mu + a[article] + b[person] + e (person offsets removed)
+  # raw_mean: plain mean of the article's essay labels
+  kind: adjusted
+  person_ridge: 1.0              # shrinkage on a/b in the additive model
+
+features:
+  model: meta-llama/Llama-3.1-8B-Instruct   # gated: needs HF_TOKEN with access granted
+  dtype: bfloat16
+  max_article_tokens: 3072        # longest article ~5k words; truncates only a few
+  use_chat_template: true
+  prompt: |
+    Read the following news article.
+
+    Title: {title}
+
+    {text}
+
+    How much empathy and how much personal distress would a typical reader feel after reading this article?
+  cache_dir: cache/features
+
+head:
+  type: ridge                     # ridge | linear | mlp | tfidf_ridge   (or --head on the CLI)
+  layers: [8, 12, 16, 20, 24, 28, 32]
+  torch_layers: [16, 24, 32]      # linear / mlp: narrower grid (each fit ~100x a ridge fit)
+  pooling: [mean, last]
+  alphas: [10, 100, 1000, 10000, 100000]   # ridge / tfidf_ridge
+  weight_decay: [0.1, 1, 10, 30]           # linear / mlp (AdamW, decoupled)
+  lr: 1e-3
+  epochs: 300
+  hidden: 256                     # mlp only
+  dropout: 0.1
+
+eval:
+  protocols: [holdout, article_cv]
+  refit_on_train_val: true        # holdout: refit the chosen candidate on train+val
+  bootstrap: 1000                 # holdout: test CIs by resampling test articles
+  outer_folds: 5
+  inner_folds: 5
+  repeats: 5
+
+output_dir: runs

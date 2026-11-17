@@ -1,0 +1,9 @@
+torch>=2.2
+transformers>=4.56
+accelerate
+numpy
+pandas
+scipy
+scikit-learn
+pyyaml
+gdown
