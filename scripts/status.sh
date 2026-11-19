@@ -1,56 +1,76 @@
 #!/usr/bin/env bash
-# One-screen status of the cluster run. From the laptop:
+# One-screen status of the cluster runs. From the laptop:
 #   ssh -t micm-cluster 'watch -n 10 ~/wassa-engagement/scripts/status.sh'
-# Reads only the log, the pid file and runs/*/results.json — starts no computation.
+# Reads only processes, logs and runs/*/results.json — starts no computation.
 cd "$(dirname "$0")/.."
-LOG=${LOG:-logs/baseline.log}
-PID=$(cat logs/baseline.pid 2>/dev/null)
 
-if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-  echo "RUN: running (pid $PID, $(ps -o etime= -p "$PID" | xargs) elapsed)"
-elif grep -q ALL_DONE "$LOG" 2>/dev/null; then
-  echo "RUN: finished"
+# --- what is running right now (from the process list, so it works for any launcher/log)
+JOB=$(pgrep -af "python -m engagement" | grep -v pgrep | head -1)
+if [ -n "$JOB" ]; then
+  PID=${JOB%% *}
+  HEAD=$(grep -oP -- '--head \K\S+' <<<"$JOB" || echo "?")
+  SETS=$(grep -oP -- '--set \K\S+' <<<"$JOB" | tr '\n' ' ')
+  STAGE=$(grep -oP 'engagement \K(prepare|features|train)' <<<"$JOB")
+  echo "RUNNING: $STAGE  head=$HEAD  ${SETS:+variant: $SETS} (pid $PID, $(ps -o etime= -p "$PID" | xargs))"
 else
-  echo "RUN: not running"
+  echo "RUNNING: nothing"
 fi
-echo "log last written $(( $(date +%s) - $(stat -c %Y "$LOG") ))s ago"
 
-python3 - "$LOG" <<'EOF'
+# newest log = the active (or last) run
+LOG=${LOG:-$(ls -t logs/*.log 2>/dev/null | head -1)}
+[ -n "$LOG" ] && echo "log: $LOG (last written $(( $(date +%s) - $(stat -c %Y "$LOG") ))s ago)"
+
+python3 - "$LOG" "$HEAD" <<'EOF'
 import glob, json, re, sys
-log = open(sys.argv[1], errors='replace').read()
-heads = ['tfidf_ridge', 'ridge', 'linear', 'mlp']
-done = re.findall(r'wrote runs/\S+?_(tfidf_ridge|ridge|linear|mlp)_\d', log)
-stage = 'features' if 'saved cache' not in log and 'features cached' not in log else None
-if stage:
-    m = re.findall(r'\[(\d+)/(\d+)\] ', log)
-    print(f'stage: features {m[-1][0]}/{m[-1][1]} articles' if m else 'stage: loading model')
-elif len(done) < len(heads):
-    cur = heads[len(done)]
-    tail = log.split('wrote runs/')[-1] if done else log
+log = open(sys.argv[1], errors='replace').read() if sys.argv[1] else ''
+tail = log.split('wrote runs/')[-1]  # the head currently being trained
+m = re.findall(r'\[(\d+)/(\d+)\] ', tail)
+if m and 'saved cache' not in tail:
+    print(f'progress: extracting features {m[-1][0]}/{m[-1][1]} articles')
+elif '== article_cv' in tail:
     folds = len(re.findall(r'repeat \d+ fold \d+: chose', tail))
-    phase = 'article_cv' if '== article_cv' in tail else 'holdout'
-    bar = '#' * folds + '.' * (25 - folds)
-    print(f'stage: head {cur} ({len(done) + 1}/4)  {phase}  cv folds [{bar}] {folds}/25')
-    last = re.findall(r'repeat \d+: article_adjusted_avg=\S+', tail)
-    if last:
-        print('  last repeat:', last[-1])
-if re.search(r'Traceback|Error|Killed|out of memory', log):
-    print('!! error in log:', [l for l in log.splitlines() if re.search(r'Traceback|Error|Killed|out of memory', l)][-1][:150])
+    print(f'progress: CV on train  [{"#" * folds}{"." * (25 - folds)}] {folds}/25 folds')
+elif '== holdout' in tail:
+    print('progress: holdout (val selection -> test)')
+errs = [l for l in log.splitlines() if re.search(r'Traceback|Error|Killed|out of memory', l)]
+if errs:
+    print('!! error in log:', errs[-1][:150])
 
-print(f'\n{"run":30s} | {"CV(train) article_adj":>21s} | {"TEST essay_avg [90% CI]":>25s} {"article":>7s}  chosen')
-for f in sorted(glob.glob('runs/*/results.json')):
+def label(path):
+    name = path.split('/')[1]
+    head = re.search(r'_(tfidf_ridge|ridge|linear|mlp)_\d{8}-\d{6}$', name).group(1)
+    tags = []
+    if 'exclude_test_articles_from_train=false' in name:
+        tags.append('keep-test-arts')
+    if 'kind=raw_mean' in name:
+        tags.append('raw-mean-target')
+    return ' + '.join(tags) or 'main', head
+
+rows = []
+for f in glob.glob('runs/*/results.json'):
     if 'superseded' in f:
         continue
     r = json.load(open(f))
-    run = re.sub(r'^runs/baseline_article_only_?|_\d{8}-\d{6}/results.json$', '', f)
+    variant, head = label(f)
     cv = r.get('article_cv', {}).get('metrics')
-    cvs = f'{cv["article_adjusted_avg"]["mean"]:+.3f} ± {cv["article_adjusted_avg"]["sd"]:.3f}' if cv else '-'
     h = r.get('holdout', {}).get('metrics')
-    hs = '-'
+    rows.append((variant, head, cv, h))
+
+order = {'main': 0, 'raw-mean-target': 1, 'keep-test-arts': 2}
+heads = {'ridge': 0, 'mlp': 1, 'linear': 2, 'tfidf_ridge': 3}
+print(f'\n{"variant":16s} {"head":11s} | {"CV train (adj)":>15s} | {"TEST essay [90% CI]":>23s} | {"TEST article":>12s} | chosen on val')
+last = None
+for variant, head, cv, h in sorted(rows, key=lambda x: (order.get(x[0], 9), heads[x[1]])):
+    if last is not None and variant != last:
+        print('-' * 100)
+    last = variant
+    cvs = f'{cv["article_adjusted_avg"]["mean"]:+.3f} ± {cv["article_adjusted_avg"]["sd"]:.3f}' if cv else '-'
     if h:
         e, a = h['test']['essay_avg'], h['test']['article_raw_avg']
-        hs = f'{e["value"]:+.3f} [{e["ci90"][0]:+.2f}, {e["ci90"][1]:+.2f}] {a["value"]:+7.3f}  {h["chosen"]}'
-    print(f'{run[:30]:30s} | {cvs:>21s} | {hs}')
+        ts = f'{e["value"]:+.3f} [{e["ci90"][0]:+.2f}, {e["ci90"][1]:+.2f}]'
+        print(f'{variant:16s} {head:11s} | {cvs:>15s} | {ts:>23s} | {a["value"]:+12.3f} | {h["chosen"]}')
+    else:
+        print(f'{variant:16s} {head:11s} | {cvs:>15s} | {"-":>23s} | {"-":>12s} |')
 EOF
 
 echo

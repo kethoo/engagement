@@ -118,6 +118,26 @@ over repeats); test = official test set, 90% CI over its 14 articles.
   readers' (r = 0.04 empathy, 0.45 distress), so memorising it hurts. Hence the default
   `exclude_test_articles_from_train: true`.
 
+#### Target: adjusted mean (default) vs plain per-article mean
+
+The plan's target is the plain mean of an article's readers (`--set targets.kind=raw_mean`).
+The default removes each reader's personal offset first (additive model above).
+
+| head | target | CV, article vs **plain** mean | CV, article vs adjusted | test, essay [90% CI] | test, article | best val r |
+|---|---|---|---|---|---|---|
+| ridge | adjusted | **0.334 ± 0.062** | **0.484 ± 0.078** | 0.261 [0.04, 0.38] | 0.413 | 0.657 |
+| ridge | plain | 0.167 ± 0.074 | 0.316 ± 0.080 | 0.335 [0.17, 0.42] | 0.571 | 0.018 |
+| MLP | adjusted | **0.328 ± 0.042** | **0.480 ± 0.071** | 0.317 [0.11, 0.41] | 0.503 | 0.602 |
+| MLP | plain | 0.187 ± 0.014 | 0.326 ± 0.019 | 0.297 [0.10, 0.40] | 0.457 | −0.021 |
+| linear | adjusted | **0.305 ± 0.056** | **0.425 ± 0.064** | 0.248 [0.03, 0.38] | 0.404 | 0.638 |
+| linear | plain | 0.185 ± 0.054 | 0.319 ± 0.049 | 0.333 [0.16, 0.42] | 0.569 | 0.030 |
+
+- In CV (99 articles × 5 repeats) training on the adjusted mean is ~1.8× better — **even
+  when scored against the plain mean**, the target the plain variant is trained for.
+- On the 14-article test set the plain variant looks somewhat better, but its validation
+  selection is random: the best of 70 candidates scores ≈ 0 on the 10 val articles (median
+  −0.31), because a plain mean over ~10 readers is mostly reader composition. CIs overlap.
+
 Experiments are meant to move onto
 **[micm-nlp](https://nlp.micm.edu.ge/en/latest/index.html)** (Muskhelishvili Institute of
 Computational Mathematics, Georgian Technical University) once the setup is settled;
