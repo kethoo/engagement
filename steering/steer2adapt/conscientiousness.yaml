@@ -1,0 +1,28 @@
+# Model to use (references models.yaml)
+model: "llama_3_1_8b_ins"
+
+# Template for wrapping personas
+template: "Act as if you're {persona}."
+
+# Suffix data file
+suffix_data: "data/all_truncated_outputs.json"
+
+# Suffix truncation settings
+truncate_suffixes: true
+truncate_offset: 0  # Use 0 for output suffixes, -5 for fact suffixes
+
+# Positive personas (high conscientiousness)
+positive_personas:
+  - "extremely conscientious, organized, responsible, and disciplined"
+  - "very reliable, hardworking, punctual, and detail-oriented"
+  - "highly methodical, thorough, goal-focused, and self-controlled"
+
+# Negative personas (low conscientiousness)
+negative_personas:
+  - "very unconscientious, disorganized, irresponsible, and impulsive"
+  - "extremely careless, lazy, unreliable, and inattentive to details"
+  - "highly spontaneous, undisciplined, and unconcerned about goals or deadlines"
+
+# Training hyperparameters
+batch_size: 32
+method: "pca_center"

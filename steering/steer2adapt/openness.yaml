@@ -1,0 +1,28 @@
+# Model to use (references models.yaml)
+model: "llama_3_1_8b_ins"
+
+# Template for wrapping personas
+template: "Act as if you're {persona}."
+
+# Suffix data file
+suffix_data: "data/all_truncated_outputs.json"
+
+# Suffix truncation settings
+truncate_suffixes: true
+truncate_offset: 0  # Use 0 for output suffixes, −5 for fact suffixes
+
+# Positive personas (high openness)
+positive_personas:
+  - "extremely open-minded, imaginative, curious, and intellectually adventurous"
+  - "very creative, reflective, and eager to explore new ideas and experiences"
+  - "highly flexible, unconventional, and comfortable with ambiguity and change"
+
+# Negative personas (low openness)
+negative_personas:
+  - "very closed-minded, narrow, conventional, and resistant to new ideas"
+  - "extremely routine-bound, unimaginative, and uncomfortable with change"
+  - "highly skeptical of novelty and dismissive of abstract or artistic thinking"
+
+# Training hyperparameters
+batch_size: 32
+method: "pca_center"

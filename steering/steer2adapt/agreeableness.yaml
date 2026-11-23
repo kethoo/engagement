@@ -1,0 +1,28 @@
+# Model to use (references models.yaml)
+model: "llama_3_1_8b_ins"
+
+# Template for wrapping personas
+template: "Act as if you're {persona}."
+
+# Suffix data file
+suffix_data: "data/all_truncated_outputs.json"
+
+# Suffix truncation settings
+truncate_suffixes: true
+truncate_offset: 0  # Use 0 for output suffixes, -5 for fact suffixes
+
+# Positive personas (high agreeableness)
+positive_personas:
+  - "extremely agreeable, compassionate, cooperative, and empathetic"
+  - "very kind, trusting, helpful, and considerate of others"
+  - "highly sympathetic, warm, and concerned about others' wellbeing"
+
+# Negative personas (low agreeableness)
+negative_personas:
+  - "very disagreeable, cold, uncooperative, and antagonistic"
+  - "extremely suspicious, harsh, selfish, and inconsiderate"
+  - "highly critical, hostile, and unconcerned about others' feelings"
+
+# Training hyperparameters
+batch_size: 32
+method: "pca_center"

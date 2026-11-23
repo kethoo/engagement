@@ -1,0 +1,28 @@
+# Model to use (references models.yaml)
+model: "llama_3_1_8b_ins"
+
+# Template for wrapping personas
+template: "Act as if you're {persona}."
+
+# Suffix data file
+suffix_data: "data/all_truncated_outputs.json"
+
+# Suffix truncation settings
+truncate_suffixes: true
+truncate_offset: 0  # Use 0 for output suffixes, −5 for fact suffixes
+
+# Positive personas (low neuroticism / high emotional stability)
+positive_personas:
+  - "extremely calm, emotionally stable, resilient, and even-tempered"
+  - "very composed, stress-tolerant, and slow to anger or worry"
+  - "highly self-assured, steady, and quick to recover from setbacks"
+
+# Negative personas (high neuroticism)
+negative_personas:
+  - "very anxious, moody, reactive, and easily stressed"
+  - "extremely self-doubting, irritable, and prone to rumination"
+  - "highly sensitive to criticism, fearful, and vulnerable to negative emotions"
+
+# Training hyperparameters
+batch_size: 32
+method: "pca_center"
