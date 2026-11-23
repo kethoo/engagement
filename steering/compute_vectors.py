@@ -21,6 +21,7 @@ Llama control layer ``-10`` is key 22.
 
     python -m steering.compute_vectors --trait agreeableness
     python -m steering.compute_vectors --trait all
+    python -m steering.compute_vectors --trait agreeableness --save-hiddens --out steering/hiddens
 """
 
 from __future__ import annotations
@@ -81,17 +82,25 @@ class _MeanCapture:
 
     repeng's ``pca_center`` subtracts the pair centre from the hidden states in place, so the
     means are taken here, before ``read_representations`` sees the array.
+
+    With ``keep=True`` it also keeps a float16 copy of every raw hidden state (exact: the model
+    runs in fp16) and additionally requests key 0 (output of block 0), which repeng's default
+    layer list (keys 31..1) leaves out. Key 0 is removed again before repeng sees the dict, so
+    the vectors are unchanged.
     """
 
-    def __init__(self):
-        self.orig, self.stats = rx.batched_get_hiddens, {}
+    def __init__(self, keep: bool = False):
+        self.orig, self.stats, self.keep, self.raw = rx.batched_get_hiddens, {}, keep, {}
 
     def __enter__(self):
-        def wrapped(*args, **kwargs):
-            hs = self.orig(*args, **kwargs)
+        def wrapped(model, tokenizer, inputs, hidden_layers, batch_size):
+            layers = list(hidden_layers) + ([0] if self.keep and 0 not in hidden_layers else [])
+            hs = self.orig(model, tokenizer, inputs, layers, batch_size)
             for layer, h in hs.items():  # rows are [pos, neg, pos, neg, ...]
                 self.stats[layer] = (h[::2].mean(0), h[1::2].mean(0))
-            return hs
+                if self.keep:
+                    self.raw[layer] = h.astype(np.float16)  # a copy, taken before the in-place centring
+            return {l: hs[l] for l in hidden_layers}
         rx.batched_get_hiddens = wrapped
         return self
 
@@ -99,7 +108,55 @@ class _MeanCapture:
         rx.batched_get_hiddens = self.orig
 
 
-def compute(trait: str, model, tok, model_key: str, mc: dict, out_dir: Path) -> dict:
+def save_hiddens(cap: _MeanCapture, cv, vc: dict, suffixes: list[str], stem: Path) -> dict:
+    """Write the raw last-token hidden states of all persona strings, all decoder blocks.
+
+    ``{stem}_hiddens.npy``  float16 [n_layers, 2 * n_pairs, d]; layer axis = keys 0..31
+                            (key k = output of block k = hidden_states[k+1])
+    ``{stem}_rows.csv``     one row per string: pair, suffix index, persona pair, pole, texts
+
+    Then checks that the saved states reproduce this run's vectors: difference of means and
+    repeng's ``pca_center`` recomputed from the file must match (cosine ≈ 1) at every layer.
+    """
+    import pandas as pd
+    from sklearn.decomposition import PCA
+
+    layers = sorted(cap.raw)
+    H = np.lib.format.open_memmap(f'{stem}_hiddens.npy', mode='w+', dtype=np.float16,
+                                  shape=(len(layers), *cap.raw[layers[0]].shape))
+    for i, l in enumerate(layers):
+        H[i] = cap.raw[l]
+    H.flush()
+
+    n_pp = len(vc['positive_personas'])
+    rows = []
+    for pair in range(len(suffixes) * n_pp):
+        s, pp = divmod(pair, n_pp)  # make_dataset: suffix-major, persona pair minor
+        for pole, persona in (('positive', vc['positive_personas'][pp]), ('negative', vc['negative_personas'][pp])):
+            rows.append({'row': len(rows), 'pair': pair, 'suffix_idx': s, 'persona_pair': pp,
+                         'pole': pole, 'persona': persona, 'suffix': suffixes[s]})
+    pd.DataFrame(rows).to_csv(f'{stem}_rows.csv', index=False)
+
+    cos = lambda a, b: float(a @ b / np.linalg.norm(a) / np.linalg.norm(b))
+    check = {}
+    H = np.load(f'{stem}_hiddens.npy', mmap_mode='r')
+    for i, l in enumerate(layers):
+        h = H[i].astype(np.float32)
+        dm = h[::2].mean(0) - h[1::2].mean(0)
+        c = {'diffmean': cos(dm, cap.stats[l][0] - cap.stats[l][1])}
+        if l in cv.directions:  # same arithmetic as repeng's pca_center
+            centre = (h[::2] + h[1::2]) / 2
+            h[::2] -= centre
+            h[1::2] -= centre
+            c['pca_center_abs'] = abs(cos(PCA(n_components=1).fit(h).components_[0], cv.directions[l]))
+        check[l] = c
+    worst = {k: min(c[k] for c in check.values() if k in c) for k in ('diffmean', 'pca_center_abs')}
+    print(f'saved {H.shape} float16 -> {stem}_hiddens.npy ({H.nbytes / 1e9:.2f} GB); '
+          f'reproduces vectors: min cos {worst}')
+    return {'hiddens_shape': list(H.shape), 'hiddens_layer_keys': layers, 'hiddens_check_min_cos': worst}
+
+
+def compute(trait: str, model, tok, model_key: str, mc: dict, out_dir: Path, keep_hiddens: bool = False) -> dict:
     vc, _, _ = load_configs(trait, model_key)
     suffixes = make_suffixes(vc, tok)
     dataset = make_dataset(vc, mc, suffixes)
@@ -107,7 +164,7 @@ def compute(trait: str, model, tok, model_key: str, mc: dict, out_dir: Path) -> 
     print(f'[{trait}] example positive: {dataset[len(dataset) // 2].positive!r}')
 
     t0 = time.time()
-    with _MeanCapture() as cap:
+    with _MeanCapture(keep_hiddens) as cap:
         cv = ControlVector.train(model, tok, dataset, method=vc['method'], batch_size=vc['batch_size'])
     secs = time.time() - t0
 
@@ -133,6 +190,8 @@ def compute(trait: str, model, tok, model_key: str, mc: dict, out_dir: Path) -> 
         'layer_keys': 'repeng: key k = output of decoder block k = hidden_states[k+1]',
         'versions': {p: version(p) for p in ('repeng', 'transformers', 'torch', 'scikit-learn', 'numpy')},
     }
+    if keep_hiddens:
+        meta.update(save_hiddens(cap, cv, vc, suffixes, stem))
     json.dump(meta, open(f'{stem}.json', 'w'), indent=2)
     print(f'[{trait}] wrote {stem}.pt/.npz/.json ({secs:.0f}s)')
     return meta
@@ -145,6 +204,8 @@ def main():
     ap.add_argument('--model-path', default=None,
                     help='load weights/tokenizer from this local dir instead of the Hub id in models.yaml')
     ap.add_argument('--out', default='steering/vectors')
+    ap.add_argument('--save-hiddens', action='store_true',
+                    help='also save every raw last-token hidden state, all decoder blocks (~1.8 GB per trait)')
     a = ap.parse_args()
     traits = TRAITS if a.trait == 'all' else a.trait.split(',')
 
@@ -164,7 +225,7 @@ def main():
     model = ControlModel(model, mc['control_layers'])
 
     for trait in traits:
-        compute(trait, model, tok, model_key, mc, out_dir)
+        compute(trait, model, tok, model_key, mc, out_dir, a.save_hiddens)
 
 
 if __name__ == '__main__':

@@ -8,3 +8,4 @@ __pycache__/
 .env
 steering/vectors/
 steering/results/
+steering/hiddens/
